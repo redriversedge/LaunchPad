@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { JobCard } from "@/components/jobs/job-card";
 import { LoadingSpinner } from "@/components/shared/loading-spinner";
 
@@ -21,7 +22,44 @@ interface SearchResult {
   dbId?: string;
 }
 
+const STORAGE_KEY = "launchpad-job-search";
+
+function loadCachedSearch(): {
+  results: SearchResult[];
+  query: string;
+  location: string;
+  jobType: string;
+  remote: boolean;
+  totalResults: number;
+  sources: string[];
+} | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedSearch(data: {
+  results: SearchResult[];
+  query: string;
+  location: string;
+  jobType: string;
+  remote: boolean;
+  totalResults: number;
+  sources: string[];
+}) {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // Storage full or unavailable
+  }
+}
+
 export default function JobsPage() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [location, setLocation] = useState("");
   const [jobType, setJobType] = useState("");
@@ -33,17 +71,73 @@ export default function JobsPage() {
   const [sources, setSources] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [error, setError] = useState("");
+  const [autoSearched, setAutoSearched] = useState(false);
 
-  async function handleSearch(searchPage = 1) {
-    if (!query.trim()) return;
+  // On mount: restore cached search or auto-search from profile
+  useEffect(() => {
+    const cached = loadCachedSearch();
+    if (cached && cached.results.length > 0) {
+      setResults(cached.results);
+      setQuery(cached.query);
+      setLocation(cached.location);
+      setJobType(cached.jobType);
+      setRemote(cached.remote);
+      setTotalResults(cached.totalResults);
+      setSources(cached.sources);
+      setSearched(true);
+      return;
+    }
 
+    // No cache, try auto-search from profile
+    autoSearchFromProfile();
+  }, []);
+
+  async function autoSearchFromProfile() {
+    try {
+      const res = await fetch("/api/profile");
+      if (!res.ok) return;
+      const data = await res.json();
+      const profile = data.profile;
+      if (!profile) return;
+
+      // Build search query from profile data
+      const terms: string[] = [];
+      if (profile.headline) terms.push(profile.headline);
+      else if (profile.targetIndustry) terms.push(profile.targetIndustry);
+      else if (profile.workHistory?.length > 0) {
+        terms.push(profile.workHistory[0].title);
+      }
+
+      if (terms.length === 0) return;
+
+      const autoQuery = terms[0];
+      const autoLocation = profile.currentLocation || "";
+
+      setQuery(autoQuery);
+      setLocation(autoLocation);
+      setAutoSearched(true);
+
+      await doSearch(autoQuery, autoLocation, "", false, 1);
+    } catch {
+      // Profile fetch failed, no auto-search
+    }
+  }
+
+  const doSearch = useCallback(async (
+    q: string,
+    loc: string,
+    jt: string,
+    rem: boolean,
+    searchPage: number,
+  ) => {
+    if (!q.trim()) return;
     setSearching(true);
     setError("");
 
-    const params = new URLSearchParams({ q: query, page: String(searchPage) });
-    if (location) params.set("location", location);
-    if (jobType) params.set("jobType", jobType);
-    if (remote) params.set("remote", "true");
+    const params = new URLSearchParams({ q, page: String(searchPage) });
+    if (loc) params.set("location", loc);
+    if (jt) params.set("jobType", jt);
+    if (rem) params.set("remote", "true");
 
     try {
       const res = await fetch(`/api/jobs/search?${params.toString()}`);
@@ -54,29 +148,51 @@ export default function JobsPage() {
         return;
       }
 
-      if (searchPage === 1) {
-        setResults(data.results);
-      } else {
-        setResults((prev) => [...prev, ...data.results]);
-      }
+      const newResults = searchPage === 1 ? data.results : [...results, ...data.results];
+      setResults(newResults);
       setTotalResults(data.totalResults);
       setSources(data.sources);
       setPage(searchPage);
       setSearched(true);
+
+      // Cache for tab persistence
+      saveCachedSearch({
+        results: newResults,
+        query: q,
+        location: loc,
+        jobType: jt,
+        remote: rem,
+        totalResults: data.totalResults,
+        sources: data.sources,
+      });
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
       setSearching(false);
     }
+  }, [results]);
+
+  function handleSearch(searchPage = 1) {
+    doSearch(query, location, jobType, remote, searchPage);
   }
 
   function handleDismiss(jobId: string) {
-    setResults((prev) => prev.filter((r) => r.dbId !== jobId));
+    const updated = results.filter((r) => r.dbId !== jobId);
+    setResults(updated);
+    // Update cache
+    saveCachedSearch({
+      results: updated,
+      query, location, jobType, remote, totalResults, sources,
+    });
+  }
+
+  function handleTrack(applicationId: string) {
+    router.push(`/applications/${applicationId}`);
   }
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold">Job Search</h1>
+      <h1 className="text-2xl font-bold dark:text-white">Job Search</h1>
 
       {/* Search form */}
       <div className="card p-4">
@@ -119,7 +235,7 @@ export default function JobsPage() {
               <option value="part-time">Part-time</option>
               <option value="contract">Contract</option>
             </select>
-            <label className="flex items-center gap-1.5 cursor-pointer">
+            <label className="flex items-center gap-1.5 cursor-pointer dark:text-gray-300">
               <input
                 type="checkbox"
                 checked={remote}
@@ -147,17 +263,22 @@ export default function JobsPage() {
 
       {searched && results.length === 0 && !searching && (
         <div className="text-center py-12">
-          <p className="text-gray-600">No jobs found matching your search. Try different keywords or broaden your filters.</p>
+          <p className="text-gray-600 dark:text-gray-400">No jobs found matching your search. Try different keywords or broaden your filters.</p>
         </div>
       )}
 
       {results.length > 0 && (
         <>
-          <div className="flex items-center justify-between text-sm text-gray-500">
+          <div className="flex items-center justify-between text-sm text-gray-500 dark:text-gray-400">
             <span>
               {totalResults > 0 ? `${totalResults.toLocaleString()} results` : `${results.length} results`}
               {sources.length > 0 && ` from ${sources.join(", ")}`}
             </span>
+            {autoSearched && (
+              <span className="text-xs text-brand-600 dark:text-brand-400">
+                Auto-searched from your profile
+              </span>
+            )}
           </div>
 
           <div className="space-y-3">
@@ -170,6 +291,7 @@ export default function JobsPage() {
                 title={job.title}
                 company={job.company}
                 location={job.location}
+                description={job.description}
                 salaryMin={job.salaryMin}
                 salaryMax={job.salaryMax}
                 jobType={job.jobType}
@@ -178,6 +300,7 @@ export default function JobsPage() {
                 postedDate={job.postedDate}
                 saved={job.saved}
                 onDismiss={handleDismiss}
+                onTrack={handleTrack}
               />
             ))}
           </div>
@@ -197,7 +320,7 @@ export default function JobsPage() {
       )}
 
       {!searched && !searching && (
-        <div className="text-center py-12 text-gray-500">
+        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
           <p>Enter a job title or keywords above to start searching.</p>
           <p className="text-sm mt-1">We search across multiple job boards to find the best matches for you.</p>
         </div>

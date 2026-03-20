@@ -3,7 +3,13 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AiThinking } from "@/components/shared/loading-spinner";
-import type { IntakeQuestion, IntakeResponse } from "@/types";
+
+interface IntakeQuestion {
+  id: string;
+  text: string;
+  type: "text" | "select" | "multiselect";
+  options?: string[];
+}
 
 export default function IntakePage() {
   const router = useRouter();
@@ -24,14 +30,24 @@ export default function IntakePage() {
   async function fetchQuestions() {
     try {
       const res = await fetch("/api/intake");
-      const data: IntakeResponse & { complete?: boolean } = await res.json();
+      const data = await res.json();
 
       if (data.complete) {
         setComplete(true);
         setMessage(data.message || "Your intake is already complete!");
+      } else if (data.questions && Array.isArray(data.questions) && data.questions.length > 0) {
+        // Ensure every question has a valid id
+        const normalized = data.questions.map((q: IntakeQuestion, i: number) => ({
+          ...q,
+          id: q.id || `q_${round}_${i}`,
+          type: q.type || "text",
+        }));
+        setQuestions(normalized);
+        setMessage(data.message || "");
+        setAnswers({});
       } else {
-        setQuestions(data.questions);
-        setMessage(data.message);
+        setComplete(true);
+        setMessage(data.message || "Your profile looks good!");
       }
     } catch {
       setError("Failed to load questions. Please refresh the page.");
@@ -41,7 +57,6 @@ export default function IntakePage() {
   }
 
   async function handleSubmit() {
-    // Check that all questions are answered
     const unanswered = questions.filter((q) => !answers[q.id]?.trim());
     if (unanswered.length > 0) {
       setError("Please answer all questions before continuing.");
@@ -60,26 +75,47 @@ export default function IntakePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           answers: mergedAnswers,
-          requestFollowUp: round < 3, // Allow up to 3 rounds
+          requestFollowUp: round < 3,
         }),
       });
 
-      const data: IntakeResponse = await res.json();
+      const data = await res.json();
 
-      if (data.complete || !data.questions || data.questions.length === 0) {
+      if (data.complete || !data.questions || !Array.isArray(data.questions) || data.questions.length === 0) {
         setComplete(true);
         setMessage(data.message || "Your profile is all set!");
       } else {
-        setQuestions(data.questions);
-        setMessage(data.message);
+        const nextRound = round + 1;
+        const normalized = data.questions.map((q: IntakeQuestion, i: number) => ({
+          ...q,
+          id: q.id || `q_${nextRound}_${i}`,
+          type: q.type || "text",
+        }));
+        setQuestions(normalized);
+        setMessage(data.message || "");
         setAnswers({});
-        setRound((r) => r + 1);
+        setRound(nextRound);
       }
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleSkip() {
+    const mergedAnswers = { ...allAnswers, ...answers };
+    try {
+      await fetch("/api/intake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers: mergedAnswers, requestFollowUp: false }),
+      });
+    } catch {
+      // Continue anyway
+    }
+    setComplete(true);
+    setMessage("Intake complete! Your profile has been updated.");
   }
 
   if (loading) {
@@ -98,8 +134,8 @@ export default function IntakePage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
           </svg>
         </div>
-        <h1 className="text-2xl font-bold mb-2">Intake Complete</h1>
-        <p className="text-gray-600 mb-6">{message}</p>
+        <h1 className="text-2xl font-bold mb-2 dark:text-white">Intake Complete</h1>
+        <p className="text-gray-600 dark:text-gray-400 mb-6">{message}</p>
         <div className="flex gap-3 justify-center">
           <button onClick={() => router.push("/profile")} className="btn-primary">
             View Your Profile
@@ -115,14 +151,14 @@ export default function IntakePage() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Let&apos;s Get to Know You</h1>
-        <p className="text-gray-600 mt-1">
+        <h1 className="text-2xl font-bold dark:text-white">Let&apos;s Get to Know You</h1>
+        <p className="text-gray-600 dark:text-gray-400 mt-1">
           Round {round} of your intake interview. The more detail you share, the better your job matches will be.
         </p>
       </div>
 
       {message && (
-        <div className="p-4 bg-brand-50 rounded-lg border border-brand-100 text-sm text-brand-800">
+        <div className="p-4 bg-brand-50 rounded-lg border border-brand-100 text-sm text-brand-800 dark:bg-brand-950 dark:border-brand-800 dark:text-brand-200">
           {message}
         </div>
       )}
@@ -137,15 +173,18 @@ export default function IntakePage() {
         <AiThinking message="Processing your answers and generating follow-up questions..." />
       ) : (
         <div className="space-y-6">
-          {questions.map((q) => (
-            <div key={q.id} className="card p-4">
-              <label className="block font-medium text-sm mb-2">{q.text}</label>
+          {questions.map((q, idx) => (
+            <div key={`${q.id}-${round}-${idx}`} className="card p-4">
+              <label className="block font-medium text-sm mb-2 dark:text-gray-200">{q.text}</label>
               {q.type === "text" && (
                 <textarea
                   rows={3}
                   className="input-field"
-                  value={answers[q.id] || ""}
-                  onChange={(e) => setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                  value={answers[q.id] ?? ""}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setAnswers((prev) => ({ ...prev, [q.id]: val }));
+                  }}
                   placeholder="Type your answer here..."
                 />
               )}
@@ -155,13 +194,13 @@ export default function IntakePage() {
                     <label key={opt} className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="radio"
-                        name={q.id}
+                        name={`${q.id}-${round}`}
                         value={opt}
                         checked={answers[q.id] === opt}
                         onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: opt }))}
                         className="text-brand-600"
                       />
-                      <span className="text-sm">{opt}</span>
+                      <span className="text-sm dark:text-gray-300">{opt}</span>
                     </label>
                   ))}
                 </div>
@@ -184,7 +223,7 @@ export default function IntakePage() {
                           }}
                           className="text-brand-600"
                         />
-                        <span className="text-sm">{opt}</span>
+                        <span className="text-sm dark:text-gray-300">{opt}</span>
                       </label>
                     );
                   })}
@@ -194,24 +233,11 @@ export default function IntakePage() {
           ))}
 
           <div className="flex gap-3">
-            <button onClick={handleSubmit} className="btn-primary">
+            <button onClick={handleSubmit} disabled={submitting} className="btn-primary">
               {round < 3 ? "Submit & Continue" : "Finish Intake"}
             </button>
             {round > 1 && (
-              <button
-                onClick={() => {
-                  setAllAnswers((prev) => ({ ...prev, ...answers }));
-                  fetch("/api/intake", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ answers: { ...allAnswers, ...answers }, requestFollowUp: false }),
-                  }).then(() => {
-                    setComplete(true);
-                    setMessage("Intake complete! Your profile has been updated.");
-                  });
-                }}
-                className="btn-secondary"
-              >
+              <button onClick={handleSkip} className="btn-secondary">
                 Skip, I&apos;m done
               </button>
             )}

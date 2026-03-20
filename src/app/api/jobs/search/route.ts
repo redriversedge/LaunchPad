@@ -21,7 +21,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Search query is required" }, { status: 400 });
   }
 
-  // Check if user is in urgent mode
   const profile = await prisma.profile.findUnique({
     where: { userId: session.user.id },
     include: { searchPreference: true },
@@ -39,81 +38,83 @@ export async function GET(request: NextRequest) {
     pageSize: 20,
   };
 
-  const { results, totalResults, sources } = await registry.searchAll(params);
+  try {
+    const { results, totalResults, sources } = await registry.searchAll(params);
 
-  // Save job listings to database for future reference
-  for (const job of results) {
-    try {
-      await prisma.jobListing.upsert({
-        where: {
-          externalId_source: {
+    // Save job listings to database and collect their database IDs
+    const dbIdMap = new Map<string, string>();
+
+    for (const job of results) {
+      try {
+        const saved = await prisma.jobListing.upsert({
+          where: {
+            externalId_source: {
+              externalId: job.externalId,
+              source: job.source,
+            },
+          },
+          update: {
+            title: job.title,
+            company: job.company,
+            location: job.location,
+            description: job.description,
+            salaryMin: job.salaryMin,
+            salaryMax: job.salaryMax,
+            jobType: job.jobType,
+            remoteType: job.remoteType,
+            url: job.url,
+            postedDate: job.postedDate ? new Date(job.postedDate) : null,
+            rawData: JSON.stringify(job.rawData),
+          },
+          create: {
             externalId: job.externalId,
             source: job.source,
+            title: job.title,
+            company: job.company,
+            location: job.location,
+            description: job.description,
+            salaryMin: job.salaryMin,
+            salaryMax: job.salaryMax,
+            jobType: job.jobType,
+            remoteType: job.remoteType,
+            url: job.url,
+            postedDate: job.postedDate ? new Date(job.postedDate) : null,
+            rawData: JSON.stringify(job.rawData),
           },
-        },
-        update: {
-          title: job.title,
-          company: job.company,
-          location: job.location,
-          description: job.description,
-          salaryMin: job.salaryMin,
-          salaryMax: job.salaryMax,
-          jobType: job.jobType,
-          remoteType: job.remoteType,
-          url: job.url,
-          postedDate: job.postedDate ? new Date(job.postedDate) : null,
-          rawData: JSON.stringify(job.rawData),
-        },
-        create: {
-          externalId: job.externalId,
-          source: job.source,
-          title: job.title,
-          company: job.company,
-          location: job.location,
-          description: job.description,
-          salaryMin: job.salaryMin,
-          salaryMax: job.salaryMax,
-          jobType: job.jobType,
-          remoteType: job.remoteType,
-          url: job.url,
-          postedDate: job.postedDate ? new Date(job.postedDate) : null,
-          rawData: JSON.stringify(job.rawData),
-        },
-      });
-    } catch {
-      // Non-critical: job may already exist with null externalId
+        });
+        dbIdMap.set(`${job.externalId}|${job.source}`, saved.id);
+      } catch {
+        // Non-critical
+      }
     }
+
+    // Check which jobs the user has already saved
+    const savedJobs = await prisma.savedJob.findMany({
+      where: { userId: session.user.id, dismissed: false },
+      select: { jobId: true },
+    });
+    const savedJobIds = new Set(savedJobs.map((s) => s.jobId));
+
+    const enrichedResults = results.map((job) => {
+      const dbId = dbIdMap.get(`${job.externalId}|${job.source}`) || "";
+      return {
+        ...job,
+        dbId,
+        saved: savedJobIds.has(dbId),
+      };
+    });
+
+    return NextResponse.json({
+      results: enrichedResults,
+      totalResults,
+      page,
+      sources,
+      urgentMode,
+      query,
+      location: location || "",
+    });
+  } catch (err) {
+    console.error("Job search error:", err);
+    return NextResponse.json({ error: "Job search failed. Please try again." }, { status: 500 });
   }
-
-  // Check which jobs the user has already saved
-  const savedJobIds = new Set(
-    (
-      await prisma.savedJob.findMany({
-        where: { userId: session.user.id },
-        select: { jobId: true },
-      })
-    ).map((s) => s.jobId)
-  );
-
-  // Get saved job listings to map external IDs
-  const savedListings = await prisma.jobListing.findMany({
-    where: { id: { in: [...savedJobIds] } },
-    select: { id: true, externalId: true, source: true },
-  });
-  const savedExternalIds = new Set(
-    savedListings.map((l) => `${l.externalId}|${l.source}`)
-  );
-
-  const enrichedResults = results.map((job) => ({
-    ...job,
-    saved: savedExternalIds.has(`${job.externalId}|${job.source}`),
-  }));
-
-  return NextResponse.json({
-    results: enrichedResults,
-    totalResults,
-    page,
-    sources,
-    urgentMode,
-  });
 }
