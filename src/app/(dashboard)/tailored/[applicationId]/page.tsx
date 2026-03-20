@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { LoadingSpinner, AiThinking } from "@/components/shared/loading-spinner";
+import { ChangePopover } from "@/components/resume/change-popover";
 
 interface TailoredChange {
   section: string;
@@ -34,39 +35,71 @@ interface TailoredData {
   changes: TailoredChange[];
 }
 
+interface ApplicationInfo {
+  job: { title: string; company: string };
+}
+
 export default function TailoredResumePage() {
   const params = useParams();
   const router = useRouter();
   const applicationId = params.applicationId as string;
+  const printRef = useRef<HTMLDivElement>(null);
 
   const [data, setData] = useState<TailoredData | null>(null);
+  const [appInfo, setAppInfo] = useState<ApplicationInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [approving, setApproving] = useState(false);
-  const [approved, setApproved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Diff editor state
+  const [editedSections, setEditedSections] = useState<TailoredSections | null>(null);
+  const [revertedIndexes, setRevertedIndexes] = useState<Set<number>>(new Set());
+  const [customEdits, setCustomEdits] = useState<Map<number, string>>(new Map());
+  const [changesPanelOpen, setChangesPanelOpen] = useState(true);
+
+  // Get the display text for a given change index
+  const getDisplayText = useCallback(
+    (changeIndex: number): string => {
+      if (!data) return "";
+      const change = data.changes[changeIndex];
+      if (customEdits.has(changeIndex)) return customEdits.get(changeIndex)!;
+      if (revertedIndexes.has(changeIndex)) return change.original;
+      return change.modified;
+    },
+    [data, revertedIndexes, customEdits]
+  );
+
   useEffect(() => {
-    async function fetchTailored() {
+    async function load() {
       try {
+        // Fetch application info
+        const appRes = await fetch(`/api/applications/${applicationId}`);
+        if (appRes.ok) {
+          const appData = await appRes.json();
+          setAppInfo(appData.application);
+        }
+
+        // Check for existing tailored resume
         const res = await fetch(`/api/resume?applicationId=${applicationId}&type=tailored`);
         if (res.ok) {
           const result = await res.json();
           if (result.resume) {
-            setData({
+            const parsed: TailoredData = {
               id: result.resume.id,
               sections: JSON.parse(result.resume.tailoredContent),
               changes: JSON.parse(result.resume.changeLog),
-            });
+            };
+            setData(parsed);
+            setEditedSections(parsed.sections);
           }
         }
       } catch {
-        // No tailored resume yet, that is fine
+        // No tailored resume yet
       } finally {
         setLoading(false);
       }
     }
-    fetchTailored();
+    load();
   }, [applicationId]);
 
   async function handleGenerate() {
@@ -83,6 +116,9 @@ export default function TailoredResumePage() {
         return;
       }
       setData(result);
+      setEditedSections(result.sections);
+      setRevertedIndexes(new Set());
+      setCustomEdits(new Map());
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -90,21 +126,202 @@ export default function TailoredResumePage() {
     }
   }
 
-  async function handleApprove() {
-    if (!data) return;
-    setApproving(true);
-    try {
-      const res = await fetch(`/api/resume/${data.id}/approve`, {
-        method: "POST",
+  function handleRevert(index: number) {
+    setRevertedIndexes((prev) => {
+      const next = new Set(prev);
+      next.add(index);
+      return next;
+    });
+    setCustomEdits((prev) => {
+      const next = new Map(prev);
+      next.delete(index);
+      return next;
+    });
+  }
+
+  function handleRestore(index: number) {
+    setRevertedIndexes((prev) => {
+      const next = new Set(prev);
+      next.delete(index);
+      return next;
+    });
+    setCustomEdits((prev) => {
+      const next = new Map(prev);
+      next.delete(index);
+      return next;
+    });
+  }
+
+  function handleEdit(index: number, newText: string) {
+    setCustomEdits((prev) => {
+      const next = new Map(prev);
+      next.set(index, newText);
+      return next;
+    });
+    setRevertedIndexes((prev) => {
+      const next = new Set(prev);
+      next.delete(index);
+      return next;
+    });
+  }
+
+  function findChangeIndex(section: string, modifiedText: string): number {
+    if (!data) return -1;
+    return data.changes.findIndex(
+      (c) => c.section === section && c.modified === modifiedText
+    );
+  }
+
+  function findBulletChangeIndex(originalBullets: string[], currentBullet: string, bulletIdx: number): number {
+    if (!data) return -1;
+    // First try exact match on modified text
+    const exactMatch = data.changes.findIndex(
+      (c) => c.section === "workHistory" && c.modified === currentBullet
+    );
+    if (exactMatch !== -1) return exactMatch;
+    return -1;
+  }
+
+  // Build final resume text for download
+  function buildResumeText(): string {
+    if (!data || !editedSections) return "";
+    const lines: string[] = [];
+
+    // Summary
+    const summaryChangeIdx = findChangeIndex("summary", data.sections.summary);
+    const finalSummary = summaryChangeIdx !== -1 ? getDisplayText(summaryChangeIdx) : editedSections.summary;
+    lines.push("PROFESSIONAL SUMMARY");
+    lines.push("=".repeat(40));
+    lines.push(finalSummary);
+    lines.push("");
+
+    // Skills
+    lines.push("SKILLS");
+    lines.push("=".repeat(40));
+    const finalSkills = editedSections.skills.map((skill, i) => {
+      const changeIdx = findChangeIndex("skills", skill);
+      if (changeIdx !== -1) return getDisplayText(changeIdx);
+      return skill;
+    });
+    lines.push(finalSkills.join(", "));
+    lines.push("");
+
+    // Work History
+    lines.push("WORK EXPERIENCE");
+    lines.push("=".repeat(40));
+    editedSections.workHistory.forEach((job) => {
+      lines.push(`${job.title}`);
+      lines.push(`${job.company}${job.location ? `, ${job.location}` : ""}`);
+      lines.push(`${job.startDate} - ${job.endDate ?? "Present"}`);
+      job.bullets.forEach((bullet) => {
+        const changeIdx = findBulletChangeIndex([], bullet, 0);
+        const finalBullet = changeIdx !== -1 ? getDisplayText(changeIdx) : bullet;
+        lines.push(`  - ${finalBullet}`);
       });
-      if (res.ok) {
-        setApproved(true);
-      }
-    } catch {
-      // Approval failed silently
-    } finally {
-      setApproving(false);
-    }
+      lines.push("");
+    });
+
+    return lines.join("\n");
+  }
+
+  function handleDownloadText() {
+    const text = buildResumeText();
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const jobTitle = appInfo?.job.title ?? "resume";
+    const company = appInfo?.job.company ?? "";
+    a.download = `Resume - ${jobTitle}${company ? ` - ${company}` : ""}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handlePrint() {
+    const printContent = printRef.current;
+    if (!printContent) return;
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    const jobTitle = appInfo?.job.title ?? "";
+    const company = appInfo?.job.company ?? "";
+
+    printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Resume - ${jobTitle}${company ? ` - ${company}` : ""}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Georgia', 'Times New Roman', serif; color: #1a1a1a; padding: 0.75in 1in; line-height: 1.5; font-size: 11pt; }
+    h1 { font-size: 14pt; font-weight: bold; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+    h2 { font-size: 11pt; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 3px; margin-top: 16px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .summary { margin-bottom: 4px; }
+    .skills { margin-bottom: 4px; }
+    .job { margin-bottom: 12px; }
+    .job-title { font-weight: bold; font-size: 11pt; }
+    .job-company { font-style: italic; }
+    .job-date { font-size: 10pt; color: #555; margin-bottom: 4px; }
+    ul { padding-left: 20px; }
+    li { margin-bottom: 3px; font-size: 10.5pt; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>${printContent.innerHTML}</body>
+</html>`);
+    printWindow.document.close();
+    setTimeout(() => printWindow.print(), 300);
+  }
+
+  // Render helpers
+  function renderTextWithChange(
+    text: string,
+    section: string
+  ): React.ReactNode {
+    if (!data) return text;
+    const changeIdx = findChangeIndex(section, text);
+    if (changeIdx === -1) return text;
+
+    const change = data.changes[changeIdx];
+    const displayText = getDisplayText(changeIdx);
+    const isReverted = revertedIndexes.has(changeIdx);
+
+    return (
+      <ChangePopover
+        original={change.original}
+        modified={change.modified}
+        reason={change.reason}
+        isReverted={isReverted}
+        onRevert={() => handleRevert(changeIdx)}
+        onRestore={() => handleRestore(changeIdx)}
+        onEdit={(newText) => handleEdit(changeIdx, newText)}
+      >
+        {displayText}
+      </ChangePopover>
+    );
+  }
+
+  function renderBulletWithChange(bullet: string): React.ReactNode {
+    if (!data) return bullet;
+    const changeIdx = findBulletChangeIndex([], bullet, 0);
+    if (changeIdx === -1) return bullet;
+
+    const change = data.changes[changeIdx];
+    const displayText = getDisplayText(changeIdx);
+    const isReverted = revertedIndexes.has(changeIdx);
+
+    return (
+      <ChangePopover
+        original={change.original}
+        modified={change.modified}
+        reason={change.reason}
+        isReverted={isReverted}
+        onRevert={() => handleRevert(changeIdx)}
+        onRestore={() => handleRestore(changeIdx)}
+        onEdit={(newText) => handleEdit(changeIdx, newText)}
+      >
+        {displayText}
+      </ChangePopover>
+    );
   }
 
   if (loading) {
@@ -115,26 +332,28 @@ export default function TailoredResumePage() {
     );
   }
 
-  // No tailored resume yet, show generate button
   if (!data && !generating) {
     return (
       <div className="max-w-3xl mx-auto space-y-6">
         <button
           onClick={() => router.back()}
-          className="text-sm text-gray-500 hover:text-gray-700"
+          className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
         >
-          Back
+          &larr; Back
         </button>
 
         <div className="card p-8 text-center space-y-4">
-          <h1 className="text-xl font-bold">Tailored Resume</h1>
-          <p className="text-gray-600">
-            No tailored resume exists for this application yet. Generate one to
-            optimize your resume for this specific job.
-          </p>
-          {error && (
-            <p className="text-sm text-red-600">{error}</p>
+          <h1 className="text-xl font-bold dark:text-white">Tailored Resume</h1>
+          {appInfo && (
+            <p className="text-gray-500 dark:text-gray-400">
+              {appInfo.job.title} at {appInfo.job.company}
+            </p>
           )}
+          <p className="text-gray-600 dark:text-gray-400">
+            AI will tailor your resume to match this specific job. Only the text changes;
+            your resume structure and formatting stay the same.
+          </p>
+          {error && <p className="text-sm text-red-600">{error}</p>}
           <button onClick={handleGenerate} className="btn-primary">
             Generate Tailored Resume
           </button>
@@ -143,146 +362,260 @@ export default function TailoredResumePage() {
     );
   }
 
-  // Currently generating
   if (generating) {
     return (
       <div className="max-w-3xl mx-auto space-y-6">
         <button
           onClick={() => router.back()}
-          className="text-sm text-gray-500 hover:text-gray-700"
+          className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
         >
-          Back
+          &larr; Back
         </button>
-        <AiThinking message="AI is tailoring your resume to match this job..." />
+        <AiThinking message="AI is tailoring your resume to match this job. This takes 15-30 seconds..." />
       </div>
     );
   }
 
-  if (!data) return null;
+  if (!data || !editedSections) return null;
+
+  const activeChanges = data.changes.length - revertedIndexes.size;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      <button
-        onClick={() => router.back()}
-        className="text-sm text-gray-500 hover:text-gray-700"
-      >
-        Back
-      </button>
-
+    <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Tailored Resume</h1>
-        <div className="flex gap-3">
-          {!approved ? (
-            <button
-              onClick={handleApprove}
-              disabled={approving}
-              className="btn-primary text-sm"
-            >
-              {approving ? "Approving..." : "Approve"}
-            </button>
-          ) : (
-            <span className="text-sm text-green-700 font-medium px-3 py-1.5 bg-green-50 rounded-lg border border-green-200">
-              Approved
-            </span>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <button
+            onClick={() => router.back()}
+            className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 mb-2 inline-block"
+          >
+            &larr; Back to Application
+          </button>
+          <h1 className="text-xl font-bold dark:text-white">Tailored Resume</h1>
+          {appInfo && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {appInfo.job.title} at {appInfo.job.company}
+            </p>
           )}
         </div>
-      </div>
-
-      {/* Summary */}
-      <div className="card p-6">
-        <h2 className="font-semibold mb-2">Summary</h2>
-        <p className="text-sm text-gray-700">{data.sections.summary}</p>
-      </div>
-
-      {/* Skills */}
-      <div className="card p-6">
-        <h2 className="font-semibold mb-3">Skills</h2>
-        <div className="flex flex-wrap gap-2">
-          {data.sections.skills.map((skill, i) => (
-            <span
-              key={i}
-              className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded"
-            >
-              {skill}
-            </span>
-          ))}
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={handleGenerate} className="btn-secondary text-xs">
+            Regenerate
+          </button>
+          <button onClick={handleDownloadText} className="btn-secondary text-xs">
+            Download .txt
+          </button>
+          <button onClick={handlePrint} className="btn-primary text-xs">
+            Download PDF
+          </button>
         </div>
       </div>
 
-      {/* Work History */}
-      <div className="card p-6">
-        <h2 className="font-semibold mb-3">Work History</h2>
-        <div className="space-y-4">
-          {data.sections.workHistory.map((job, i) => (
-            <div key={i} className="border-l-2 border-gray-200 pl-4">
-              <div className="font-medium text-sm">{job.title}</div>
-              <div className="text-sm text-gray-600">
+      {/* Changes legend */}
+      <div className="card p-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4 text-xs">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-3 h-3 rounded bg-amber-100 dark:bg-amber-900/40 border border-amber-300 dark:border-amber-600" />
+              <span className="text-gray-600 dark:text-gray-400">AI changed ({activeChanges})</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-3 h-3 rounded bg-gray-100 dark:bg-gray-700 border border-dashed border-gray-400" />
+              <span className="text-gray-600 dark:text-gray-400">Reverted ({revertedIndexes.size})</span>
+            </span>
+            <span className="text-gray-400 dark:text-gray-500">Click any highlighted text to see details</span>
+          </div>
+          <button
+            onClick={() => setChangesPanelOpen(!changesPanelOpen)}
+            className="text-xs text-brand-600 dark:text-brand-400 hover:underline"
+          >
+            {changesPanelOpen ? "Hide changes" : "Show changes"} ({data.changes.length})
+          </button>
+        </div>
+      </div>
+
+      {/* Changes panel */}
+      {changesPanelOpen && data.changes.length > 0 && (
+        <div className="card p-4 max-h-60 overflow-y-auto">
+          <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
+            All Changes ({data.changes.length})
+          </h3>
+          <div className="space-y-2">
+            {data.changes.map((change, i) => {
+              const isReverted = revertedIndexes.has(i);
+              const hasCustomEdit = customEdits.has(i);
+              return (
+                <div
+                  key={i}
+                  className={`flex items-start gap-3 p-2 rounded text-xs ${
+                    isReverted
+                      ? "bg-gray-50 dark:bg-gray-800 opacity-60"
+                      : "bg-amber-50/50 dark:bg-amber-900/10"
+                  }`}
+                >
+                  <span className="px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-medium shrink-0 capitalize">
+                    {change.section}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-gray-700 dark:text-gray-300 truncate">{change.reason}</p>
+                    {hasCustomEdit && (
+                      <span className="text-brand-600 dark:text-brand-400 text-[10px]">custom edit</span>
+                    )}
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    {isReverted ? (
+                      <button
+                        onClick={() => handleRestore(i)}
+                        className="px-2 py-0.5 rounded bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 hover:bg-brand-200"
+                      >
+                        Restore
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleRevert(i)}
+                        className="px-2 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300"
+                      >
+                        Revert
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Resume preview - visible on screen */}
+      <div className="card p-6 md:p-8 space-y-6">
+        {/* Summary */}
+        <div>
+          <h2 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wide border-b border-gray-300 dark:border-gray-600 pb-1 mb-3">
+            Professional Summary
+          </h2>
+          <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+            {renderTextWithChange(data.sections.summary, "summary")}
+          </p>
+        </div>
+
+        {/* Skills */}
+        <div>
+          <h2 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wide border-b border-gray-300 dark:border-gray-600 pb-1 mb-3">
+            Skills
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {editedSections.skills.map((skill, i) => {
+              const changeIdx = findChangeIndex("skills", skill);
+              if (changeIdx !== -1) {
+                const change = data.changes[changeIdx];
+                const displayText = getDisplayText(changeIdx);
+                const isReverted = revertedIndexes.has(changeIdx);
+                return (
+                  <ChangePopover
+                    key={i}
+                    original={change.original}
+                    modified={change.modified}
+                    reason={change.reason}
+                    isReverted={isReverted}
+                    onRevert={() => handleRevert(changeIdx)}
+                    onRestore={() => handleRestore(changeIdx)}
+                    onEdit={(newText) => handleEdit(changeIdx, newText)}
+                  >
+                    <span className="inline-block px-2 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                      {displayText}
+                    </span>
+                  </ChangePopover>
+                );
+              }
+              return (
+                <span
+                  key={i}
+                  className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded"
+                >
+                  {skill}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Work History */}
+        <div>
+          <h2 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wide border-b border-gray-300 dark:border-gray-600 pb-1 mb-3">
+            Work Experience
+          </h2>
+          <div className="space-y-5">
+            {editedSections.workHistory.map((job, i) => (
+              <div key={i}>
+                <div className="flex items-baseline justify-between flex-wrap gap-1">
+                  <div className="font-semibold text-sm text-gray-900 dark:text-white">
+                    {job.title}
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    {job.startDate} - {job.endDate ?? "Present"}
+                  </div>
+                </div>
+                <div className="text-sm text-gray-600 dark:text-gray-400 italic mb-2">
+                  {job.company}
+                  {job.location ? `, ${job.location}` : ""}
+                </div>
+                <ul className="space-y-1.5 pl-4">
+                  {job.bullets.map((bullet, j) => (
+                    <li
+                      key={j}
+                      className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed list-disc"
+                    >
+                      {renderBulletWithChange(bullet)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Hidden print-friendly version */}
+      <div className="hidden">
+        <div ref={printRef}>
+          <h2>Professional Summary</h2>
+          <p className="summary">
+            {data.changes.find((c) => c.section === "summary")
+              ? getDisplayText(data.changes.findIndex((c) => c.section === "summary"))
+              : editedSections.summary}
+          </p>
+
+          <h2>Skills</h2>
+          <p className="skills">
+            {editedSections.skills
+              .map((skill) => {
+                const idx = findChangeIndex("skills", skill);
+                return idx !== -1 ? getDisplayText(idx) : skill;
+              })
+              .join(", ")}
+          </p>
+
+          <h2>Work Experience</h2>
+          {editedSections.workHistory.map((job, i) => (
+            <div key={i} className="job">
+              <div className="job-title">{job.title}</div>
+              <div className="job-company">
                 {job.company}
                 {job.location ? `, ${job.location}` : ""}
               </div>
-              <div className="text-xs text-gray-400 mb-2">
+              <div className="job-date">
                 {job.startDate} - {job.endDate ?? "Present"}
               </div>
-              <ul className="space-y-1">
-                {job.bullets.map((bullet, j) => (
-                  <li key={j} className="text-sm text-gray-700 flex gap-2">
-                    <span className="text-gray-400 flex-shrink-0">-</span>
-                    {bullet}
-                  </li>
-                ))}
+              <ul>
+                {job.bullets.map((bullet, j) => {
+                  const idx = findBulletChangeIndex([], bullet, j);
+                  return <li key={j}>{idx !== -1 ? getDisplayText(idx) : bullet}</li>;
+                })}
               </ul>
             </div>
           ))}
         </div>
       </div>
-
-      {/* Changes */}
-      {data.changes.length > 0 && (
-        <div className="card p-6">
-          <h2 className="font-semibold mb-3">
-            Changes Made ({data.changes.length})
-          </h2>
-          <div className="space-y-4">
-            {data.changes.map((change, i) => (
-              <div key={i} className="border border-gray-100 rounded-lg p-4 space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium px-2 py-0.5 bg-brand-50 text-brand-700 rounded capitalize">
-                    {change.section}
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <div className="text-xs font-medium text-gray-400 mb-1">
-                      Original
-                    </div>
-                    <div className="text-sm text-gray-600 bg-red-50 p-2 rounded border border-red-100">
-                      {change.original}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-medium text-gray-400 mb-1">
-                      Modified
-                    </div>
-                    <div className="text-sm text-gray-700 bg-green-50 p-2 rounded border border-green-100">
-                      {change.modified}
-                    </div>
-                  </div>
-                </div>
-                <div className="text-xs text-gray-500 italic">
-                  {change.reason}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {data.changes.length === 0 && (
-        <div className="card p-6 text-center text-gray-500 text-sm">
-          No changes were needed. Your resume is already well-aligned with this job.
-        </div>
-      )}
     </div>
   );
 }

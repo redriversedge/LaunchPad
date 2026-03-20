@@ -92,6 +92,38 @@ export default function CoverLetterPage() {
     }
   }
 
+  function handleDownloadText() {
+    if (!coverLetter || !application) return;
+    const blob = new Blob([coverLetter], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Cover Letter - ${application.job.title} - ${application.job.company}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handlePrintCoverLetter() {
+    if (!coverLetter || !application) return;
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+    printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Cover Letter - ${application.job.title} - ${application.job.company}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Georgia', 'Times New Roman', serif; color: #1a1a1a; padding: 1in; line-height: 1.7; font-size: 11pt; }
+    p { margin-bottom: 12px; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>${coverLetter.split("\n").map((line: string) => line.trim() ? `<p>${line}</p>` : "<br/>").join("")}</body>
+</html>`);
+    printWindow.document.close();
+    setTimeout(() => printWindow.print(), 300);
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -135,8 +167,8 @@ export default function CoverLetterPage() {
         </div>
       )}
 
-      {/* Generate button */}
-      <div className="flex gap-3">
+      {/* Action buttons */}
+      <div className="flex gap-3 flex-wrap">
         <button
           onClick={generateCoverLetter}
           disabled={generating}
@@ -149,13 +181,21 @@ export default function CoverLetterPage() {
             : "Generate Cover Letter"}
         </button>
         {coverLetter && (
-          <button
-            onClick={saveCoverLetter}
-            disabled={saving}
-            className="btn-secondary"
-          >
-            {saving ? "Saving..." : "Save Changes"}
-          </button>
+          <>
+            <button
+              onClick={saveCoverLetter}
+              disabled={saving}
+              className="btn-secondary"
+            >
+              {saving ? "Saving..." : "Save Changes"}
+            </button>
+            <button onClick={handleDownloadText} className="btn-secondary">
+              Download .txt
+            </button>
+            <button onClick={handlePrintCoverLetter} className="btn-primary">
+              Download PDF
+            </button>
+          </>
         )}
       </div>
 

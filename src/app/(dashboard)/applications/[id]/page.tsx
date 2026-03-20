@@ -389,7 +389,7 @@ export default function ApplicationDetailPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-700">Tailored Resume</h2>
           <Link
-            href={`/tailored?applicationId=${application.id}`}
+            href={`/tailored/${application.id}`}
             className="btn-secondary text-xs"
           >
             Tailor Resume
