@@ -1,4 +1,5 @@
-import { parseOffice } from "officeparser";
+import pdf from "pdf-parse";
+import mammoth from "mammoth";
 
 export async function extractTextFromFile(buffer: Buffer, fileName: string): Promise<string> {
   const extension = fileName.toLowerCase().split(".").pop();
@@ -7,8 +8,16 @@ export async function extractTextFromFile(buffer: Buffer, fileName: string): Pro
     throw new Error(`Unsupported file type: ${extension}. Please upload a PDF or Word document.`);
   }
 
-  const result = await parseOffice(buffer);
-  const text = typeof result === "string" ? result : String(result);
+  let text: string;
+
+  if (extension === "pdf") {
+    const data = await pdf(buffer);
+    text = data.text;
+  } else {
+    // docx/doc
+    const result = await mammoth.extractRawText({ buffer });
+    text = result.value;
+  }
 
   if (!text || text.trim().length === 0) {
     throw new Error("Could not extract text from the file. The document may be image-based or empty.");

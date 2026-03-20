@@ -132,7 +132,8 @@ export default async function ProfilePage() {
           <h2 className="font-semibold mb-3">Work History</h2>
           <div className="space-y-4">
             {profile.workHistory.map((job) => {
-              const bullets = job.bullets ? JSON.parse(job.bullets) : [];
+              let bullets: string[] = [];
+              try { bullets = job.bullets ? JSON.parse(job.bullets) : []; } catch { /* malformed */ }
               return (
                 <div key={job.id} className="border-l-2 border-gray-200 pl-4">
                   <h3 className="font-medium">{job.title}</h3>

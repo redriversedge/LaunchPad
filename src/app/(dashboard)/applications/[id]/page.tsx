@@ -308,16 +308,36 @@ export default function ApplicationDetailPage() {
             </div>
           )}
         </div>
-        {application.job.url && (
-          <a
-            href={application.job.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm text-brand-600 hover:text-brand-700 mt-3 inline-block"
+        <div className="flex gap-3 mt-3">
+          {application.job.url && (
+            <a
+              href={application.job.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-brand-600 hover:text-brand-700"
+            >
+              View original listing
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* AI Apply Kit */}
+      <div className="card p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">AI Application Kit</h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              AI prepares your cover letter, answers to common questions, and step-by-step instructions
+            </p>
+          </div>
+          <Link
+            href={`/apply/${application.id}`}
+            className="btn-primary text-sm"
           >
-            View original listing
-          </a>
-        )}
+            AI Apply
+          </Link>
+        </div>
       </div>
 
       {/* Cover Letter */}

@@ -1,14 +1,31 @@
 # LaunchPad - AI-Powered Job Search App
 
+## Repository
+- **GitHub:** github.com/redriversedge/LaunchPad
+- **Branch:** main
+- **Hosting:** Vercel (deploy from GitHub)
+
 ## Architecture
 - **Framework:** Next.js 16 (App Router) + TypeScript
 - **UI:** Tailwind CSS v4 with @theme/@utility custom classes (brand-600 blue theme)
-- **Database:** SQLite via Prisma ORM v7 + Turso (hosted) via @prisma/adapter-libsql
+- **Database:** Turso (hosted SQLite) via Prisma ORM v7 + @prisma/adapter-libsql
 - **Auth:** Better Auth (email/password)
 - **AI:** Claude API (@anthropic-ai/sdk) for all intelligence
 - **Resume Parsing:** officeparser v6 (PDF + DOCX text extraction)
 - **Job APIs:** Adzuna (primary), JSearch/RapidAPI (secondary), plugin architecture
-- **Hosting:** Vercel
+- **Icons:** lucide-react
+
+## Environment Variables
+Required in `.env.local` (see `.env.example` for template):
+- `TURSO_DATABASE_URL` - Turso libsql:// connection URL
+- `TURSO_AUTH_TOKEN` - Turso database auth token
+- `BETTER_AUTH_SECRET` - Auth session signing secret
+- `BETTER_AUTH_URL` - App URL (http://localhost:3000 for dev)
+- `ANTHROPIC_API_KEY` - Claude API key
+- `NEXT_PUBLIC_APP_URL` - Public app URL
+- `ADZUNA_APP_ID` - Adzuna job search API app ID
+- `ADZUNA_APP_KEY` - Adzuna job search API key
+- `JSEARCH_RAPIDAPI_KEY` - (optional) JSearch RapidAPI key for additional job results
 
 ## Code Conventions
 - Modern TypeScript (strict mode)
@@ -24,8 +41,8 @@
 - **Prisma v7:** Uses adapter pattern. Export is PrismaLibSql (not PrismaLibSQL)
 - **Tailwind v4:** Uses @theme and @utility directives (not @layer components with @apply)
 - **officeparser v6:** parseOffice() returns AST object, use String() conversion
-- **OneDrive:** node_modules lives at c:/temp/launchpad-build/ due to sync performance. All npm/build commands run from there. Source files in OneDrive.
-- **Next.js 16 Turbopack:** Cannot handle junctions pointing outside project root
+- **OneDrive:** node_modules lives at c:/temp/launchpad-build/ due to sync performance. All npm/build commands run from there. Source files stay in OneDrive.
+- **Build directory:** c:/temp/launchpad-build/ mirrors source but has node_modules. Copy .env.local there after changes.
 
 ## Directory Structure
 - `src/app/` - Next.js pages and API routes
@@ -41,7 +58,8 @@
 - `prisma/` - Database schema
 
 ## Key Commands
-- `npm run dev` - Start dev server (run from c:/temp/launchpad-build/)
+All commands run from `c:/temp/launchpad-build/`:
+- `npm run dev` - Start dev server
 - `npm run build` - Production build
 - `npx prisma db push` - Push schema to database
 - `npx prisma studio` - Visual database browser
@@ -82,3 +100,4 @@ All prompts in src/lib/ai/prompts/:
 - Store sensitive data in localStorage (use database)
 - Use "use client" on pages that can be server components
 - Skip Zod validation on AI outputs
+- Commit .env.local or any file with API keys

@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-brand-50: #eff6ff;
   --color-brand-100: #dbeafe;
@@ -49,6 +51,14 @@
   &:hover {
     background-color: #f9fafb;
   }
+  :where(.dark, .dark *) & {
+    background-color: #1f2937;
+    color: #d1d5db;
+    border-color: #4b5563;
+    &:hover {
+      background-color: #374151;
+    }
+  }
 }
 
 @utility card {
@@ -56,6 +66,10 @@
   border-radius: 0.75rem;
   border: 1px solid #e5e7eb;
   box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  :where(.dark, .dark *) & {
+    background-color: #111827;
+    border-color: #374151;
+  }
 }
 
 @utility input-field {
@@ -68,5 +82,13 @@
   &:focus {
     border-color: var(--color-brand-500);
     box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  }
+  :where(.dark, .dark *) & {
+    background-color: #1f2937;
+    border-color: #4b5563;
+    color: #e5e7eb;
+    &:focus {
+      border-color: var(--color-brand-400);
+    }
   }
 }

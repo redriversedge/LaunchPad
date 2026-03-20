@@ -33,5 +33,9 @@ export async function callClaudeJSON<T>(params: {
   });
 
   const cleaned = result.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-  return JSON.parse(cleaned) as T;
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    throw new Error(`AI returned invalid JSON. Response started with: "${cleaned.slice(0, 200)}"`);
+  }
 }

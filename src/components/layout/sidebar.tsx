@@ -8,7 +8,8 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: HomeIcon },
   { href: "/profile", label: "Profile", icon: UserIcon },
   { href: "/resumes", label: "Resumes", icon: DocIcon },
-  { href: "/jobs", label: "Jobs", icon: SearchIcon },
+  { href: "/jobs", label: "Search Jobs", icon: SearchIcon, exact: true },
+  { href: "/jobs/saved", label: "Saved Jobs", icon: HeartIcon },
   { href: "/applications", label: "Applications", icon: ClipboardIcon },
   { href: "/stats", label: "Stats", icon: ChartIcon },
   { href: "/settings", label: "Settings", icon: GearIcon },
@@ -18,7 +19,7 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden lg:flex lg:flex-col lg:w-64 bg-white border-r border-gray-200 min-h-screen">
+    <aside className="hidden lg:flex lg:flex-col lg:w-64 bg-white border-r border-gray-200 min-h-screen dark:bg-gray-900 dark:border-gray-700">
       <div className="p-6">
         <Link href="/dashboard" className="text-xl font-bold text-brand-600">
           LaunchPad
@@ -26,7 +27,9 @@ export function Sidebar() {
       </div>
       <nav className="flex-1 px-3">
         {navItems.map((item) => {
-          const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+          const isActive = item.exact
+            ? pathname === item.href
+            : pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}
@@ -34,8 +37,8 @@ export function Sidebar() {
               className={cn(
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium mb-1 transition-colors",
                 isActive
-                  ? "bg-brand-50 text-brand-700"
-                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  ? "bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300"
+                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
               )}
             >
               <item.icon className="w-5 h-5" />
@@ -50,20 +53,24 @@ export function Sidebar() {
 
 export function MobileNav() {
   const pathname = usePathname();
-  const mobileItems = navItems.slice(0, 5);
+  const mobileItems = navItems.filter(item =>
+    ["/dashboard", "/jobs", "/jobs/saved", "/applications", "/profile"].includes(item.href)
+  );
 
   return (
-    <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">
+    <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50 dark:bg-gray-900 dark:border-gray-700">
       <div className="flex items-center justify-around py-2">
         {mobileItems.map((item) => {
-          const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+          const isActive = item.exact
+            ? pathname === item.href
+            : pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}
               href={item.href}
               className={cn(
                 "flex flex-col items-center gap-1 px-3 py-1 min-w-[56px]",
-                isActive ? "text-brand-600" : "text-gray-500"
+                isActive ? "text-brand-600" : "text-gray-500 dark:text-gray-400"
               )}
             >
               <item.icon className="w-5 h-5" />
@@ -105,6 +112,14 @@ function SearchIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+    </svg>
+  );
+}
+
+function HeartIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
     </svg>
   );
 }

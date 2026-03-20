@@ -85,18 +85,21 @@ export async function POST(request: Request) {
     if (validated.workHistory.length > 0) {
       await prisma.workHistory.deleteMany({ where: { profileId: profile.id } });
       await prisma.workHistory.createMany({
-        data: validated.workHistory.map((w) => ({
+        data: validated.workHistory.map((w) => {
+          const start = new Date(w.startDate);
+          const end = w.endDate ? new Date(w.endDate) : null;
+          return {
           profileId: profile.id,
           company: w.company,
           title: w.title,
           location: w.location,
-          startDate: new Date(w.startDate),
-          endDate: w.endDate ? new Date(w.endDate) : null,
+          startDate: isNaN(start.getTime()) ? new Date() : start,
+          endDate: end && !isNaN(end.getTime()) ? end : null,
           isCurrent: w.isCurrent,
           description: w.description,
           bullets: JSON.stringify(w.bullets),
           industry: w.industry,
-        })),
+        };}),
       });
     }
 
