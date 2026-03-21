@@ -158,6 +158,8 @@ model Resume {
   name             String
   type             String   @default("original")
   originalFileName String?
+  fileData         String?
+  fileType         String?
   parsedContent    String?
   structuredData   String?
   tailoredContent  String?

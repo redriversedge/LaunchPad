@@ -29,10 +29,27 @@ interface TailoredSections {
   workHistory: TailoredWorkHistory[];
 }
 
+interface EditStats {
+  totalChanges: number;
+  applied: number;
+  skipped: number;
+  skippedEdits: Array<{ original: string; reason: string }>;
+  qualityCheck: {
+    valid: boolean;
+    paragraphCountMatch: boolean;
+    originalCount: number;
+    currentCount: number;
+    formattingDrifts: Array<{ field: string; expected: string; actual: string }>;
+  };
+}
+
 interface TailoredData {
-  id: string;
+  id?: string;
   sections: TailoredSections;
   changes: TailoredChange[];
+  hasDocx?: boolean;
+  docxBase64?: string;
+  editStats?: EditStats | null;
 }
 
 interface ApplicationInfo {
@@ -57,7 +74,6 @@ export default function TailoredResumePage() {
   const [customEdits, setCustomEdits] = useState<Map<number, string>>(new Map());
   const [changesPanelOpen, setChangesPanelOpen] = useState(true);
 
-  // Get the display text for a given change index
   const getDisplayText = useCallback(
     (changeIndex: number): string => {
       if (!data) return "";
@@ -72,7 +88,6 @@ export default function TailoredResumePage() {
   useEffect(() => {
     async function load() {
       try {
-        // Fetch application info
         const appRes = await fetch(`/api/applications/${applicationId}`);
         if (appRes.ok) {
           const appData = await appRes.json();
@@ -106,7 +121,8 @@ export default function TailoredResumePage() {
     setGenerating(true);
     setError(null);
     try {
-      const res = await fetch(`/api/applications/${applicationId}/tailor`, {
+      // Use tailor-docx endpoint for format-preserving editing
+      const res = await fetch(`/api/applications/${applicationId}/tailor-docx`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
@@ -172,22 +188,39 @@ export default function TailoredResumePage() {
     );
   }
 
-  function findBulletChangeIndex(originalBullets: string[], currentBullet: string, bulletIdx: number): number {
+  function findBulletChangeIndex(currentBullet: string): number {
     if (!data) return -1;
-    // First try exact match on modified text
-    const exactMatch = data.changes.findIndex(
+    return data.changes.findIndex(
       (c) => c.section === "workHistory" && c.modified === currentBullet
     );
-    if (exactMatch !== -1) return exactMatch;
-    return -1;
   }
 
-  // Build final resume text for download
+  // Download the format-preserved .docx
+  function handleDownloadDocx() {
+    if (!data?.docxBase64) return;
+    const binary = atob(data.docxBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const jobTitle = appInfo?.job.title ?? "resume";
+    const company = appInfo?.job.company ?? "";
+    a.download = `Resume - ${jobTitle}${company ? ` - ${company}` : ""}.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Build final resume text for .txt download
   function buildResumeText(): string {
     if (!data || !editedSections) return "";
     const lines: string[] = [];
 
-    // Summary
     const summaryChangeIdx = findChangeIndex("summary", data.sections.summary);
     const finalSummary = summaryChangeIdx !== -1 ? getDisplayText(summaryChangeIdx) : editedSections.summary;
     lines.push("PROFESSIONAL SUMMARY");
@@ -195,10 +228,9 @@ export default function TailoredResumePage() {
     lines.push(finalSummary);
     lines.push("");
 
-    // Skills
     lines.push("SKILLS");
     lines.push("=".repeat(40));
-    const finalSkills = editedSections.skills.map((skill, i) => {
+    const finalSkills = editedSections.skills.map((skill) => {
       const changeIdx = findChangeIndex("skills", skill);
       if (changeIdx !== -1) return getDisplayText(changeIdx);
       return skill;
@@ -206,7 +238,6 @@ export default function TailoredResumePage() {
     lines.push(finalSkills.join(", "));
     lines.push("");
 
-    // Work History
     lines.push("WORK EXPERIENCE");
     lines.push("=".repeat(40));
     editedSections.workHistory.forEach((job) => {
@@ -214,7 +245,7 @@ export default function TailoredResumePage() {
       lines.push(`${job.company}${job.location ? `, ${job.location}` : ""}`);
       lines.push(`${job.startDate} - ${job.endDate ?? "Present"}`);
       job.bullets.forEach((bullet) => {
-        const changeIdx = findBulletChangeIndex([], bullet, 0);
+        const changeIdx = findBulletChangeIndex(bullet);
         const finalBullet = changeIdx !== -1 ? getDisplayText(changeIdx) : bullet;
         lines.push(`  - ${finalBullet}`);
       });
@@ -272,7 +303,6 @@ export default function TailoredResumePage() {
     setTimeout(() => printWindow.print(), 300);
   }
 
-  // Render helpers
   function renderTextWithChange(
     text: string,
     section: string
@@ -302,7 +332,7 @@ export default function TailoredResumePage() {
 
   function renderBulletWithChange(bullet: string): React.ReactNode {
     if (!data) return bullet;
-    const changeIdx = findBulletChangeIndex([], bullet, 0);
+    const changeIdx = findBulletChangeIndex(bullet);
     if (changeIdx === -1) return bullet;
 
     const change = data.changes[changeIdx];
@@ -350,8 +380,9 @@ export default function TailoredResumePage() {
             </p>
           )}
           <p className="text-gray-600 dark:text-gray-400">
-            AI will tailor your resume to match this specific job. Only the text changes;
-            your resume structure and formatting stay the same.
+            AI will tailor your resume to match this specific job. If you uploaded a .docx file,
+            the original formatting (fonts, spacing, margins, bullet styles) is fully preserved.
+            Only the text content changes.
           </p>
           {error && <p className="text-sm text-red-600">{error}</p>}
           <button onClick={handleGenerate} className="btn-primary">
@@ -402,14 +433,59 @@ export default function TailoredResumePage() {
           <button onClick={handleGenerate} className="btn-secondary text-xs">
             Regenerate
           </button>
+          {data.hasDocx && data.docxBase64 && (
+            <button onClick={handleDownloadDocx} className="btn-primary text-xs">
+              Download .docx
+            </button>
+          )}
           <button onClick={handleDownloadText} className="btn-secondary text-xs">
             Download .txt
           </button>
-          <button onClick={handlePrint} className="btn-primary text-xs">
-            Download PDF
+          <button onClick={handlePrint} className="btn-secondary text-xs">
+            Print / PDF
           </button>
         </div>
       </div>
+
+      {/* Format preservation notice */}
+      {data.hasDocx && data.editStats && (
+        <div className="card p-3 bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800">
+          <div className="flex items-center gap-2 text-xs text-green-700 dark:text-green-300">
+            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="font-medium">
+              Format-preserved .docx ready.{" "}
+              {data.editStats.applied} of {data.editStats.totalChanges} changes applied surgically.
+              {data.editStats.skipped > 0 && (
+                <> {data.editStats.skipped} skipped (flagged below).</>
+              )}
+              {" "}Original fonts, spacing, margins, and bullet styles are intact.
+            </span>
+          </div>
+          {data.editStats.skippedEdits.length > 0 && (
+            <div className="mt-2 space-y-1">
+              <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 uppercase">
+                Skipped edits (manual review needed)
+              </span>
+              {data.editStats.skippedEdits.map((se, i) => (
+                <div key={i} className="text-[10px] text-gray-600 dark:text-gray-400 pl-6">
+                  {se.reason}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!data.hasDocx && (
+        <div className="card p-3 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800">
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            No .docx file on record. Re-upload your resume as a .docx to get format-preserved downloads.
+            The .txt and Print options are available now.
+          </p>
+        </div>
+      )}
 
       {/* Changes legend */}
       <div className="card p-3">
@@ -486,7 +562,7 @@ export default function TailoredResumePage() {
         </div>
       )}
 
-      {/* Resume preview - visible on screen */}
+      {/* Resume preview */}
       <div className="card p-6 md:p-8 space-y-6">
         {/* Summary */}
         <div>
@@ -608,7 +684,7 @@ export default function TailoredResumePage() {
               </div>
               <ul>
                 {job.bullets.map((bullet, j) => {
-                  const idx = findBulletChangeIndex([], bullet, j);
+                  const idx = findBulletChangeIndex(bullet);
                   return <li key={j}>{idx !== -1 ? getDisplayText(idx) : bullet}</li>;
                 })}
               </ul>

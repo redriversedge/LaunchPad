@@ -38,13 +38,19 @@ export async function POST(request: Request) {
     // Validate with Zod
     const validated = ParsedResumeSchema.parse(parsed);
 
-    // Save resume record
+    // Determine file type
+    const ext = file.name.toLowerCase().split(".").pop() || "";
+    const fileType = ext === "pdf" ? "pdf" : "docx";
+
+    // Save resume record with original file bytes for format-preserving editing
     const resume = await prisma.resume.create({
       data: {
         userId: session.user.id,
         name: "Original Resume",
         type: "original",
         originalFileName: file.name,
+        fileData: buffer.toString("base64"),
+        fileType,
         parsedContent: rawText,
         structuredData: JSON.stringify(validated),
       },
