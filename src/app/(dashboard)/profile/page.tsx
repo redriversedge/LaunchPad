@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { ProfileStrengthMeter } from "@/components/profile/profile-strength-meter";
+import { ResumeManager } from "@/components/profile/resume-manager";
 import { EmptyState } from "@/components/shared/empty-state";
 
 export default async function ProfilePage() {
@@ -64,6 +65,9 @@ export default async function ProfilePage() {
           <p className="text-sm text-gray-700">{profile.summary}</p>
         </div>
       )}
+
+      {/* Resume Manager */}
+      <ResumeManager />
 
       {/* Preferences */}
       <div className="card p-6">
