@@ -35,9 +35,9 @@ export async function POST(
     return NextResponse.json({ error: "Please complete your profile first" }, { status: 400 });
   }
 
-  // Get the user's most recent original resume
+  // Get the user's current base resume
   const originalResume = await prisma.resume.findFirst({
-    where: { userId: session.user.id, type: "original" },
+    where: { userId: session.user.id, type: "original", isCurrent: true },
     orderBy: { createdAt: "desc" },
   });
 

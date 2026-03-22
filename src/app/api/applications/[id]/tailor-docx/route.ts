@@ -43,9 +43,9 @@ export async function POST(
     return NextResponse.json({ error: "Please complete your profile first" }, { status: 400 });
   }
 
-  // Get the original resume with file data
+  // Get the user's current base resume with file data
   const originalResume = await prisma.resume.findFirst({
-    where: { userId: session.user.id, type: "original" },
+    where: { userId: session.user.id, type: "original", isCurrent: true },
     orderBy: { createdAt: "desc" },
   });
 
@@ -53,8 +53,10 @@ export async function POST(
     return NextResponse.json({ error: "No parsed resume found. Upload a resume first." }, { status: 400 });
   }
 
-  // Check if we have the original file for format-preserving editing
-  const hasOriginalFile = originalResume.fileData && originalResume.fileType === "docx";
+  // Check if we have a .docx to work with (either original .docx or converted from PDF)
+  const hasOriginalDocx = originalResume.fileData && originalResume.fileType === "docx";
+  const hasConvertedDocx = originalResume.convertedDocxData && originalResume.fileType === "pdf";
+  const hasOriginalFile = hasOriginalDocx || hasConvertedDocx;
 
   let parsedResume;
   try {
@@ -115,7 +117,11 @@ export async function POST(
 
     // Step 2: If we have the original .docx, apply changes surgically
     if (hasOriginalFile) {
-      const originalBuffer = Buffer.from(originalResume.fileData!, "base64");
+      // Use original .docx if available, otherwise use the converted .docx from PDF
+      const docxBase64 = hasOriginalDocx
+        ? originalResume.fileData!
+        : originalResume.convertedDocxData!;
+      const originalBuffer = Buffer.from(docxBase64, "base64");
 
       // Convert AI changes to TextReplacement format
       const replacements: TextReplacement[] = validated.changes.map((change) => ({

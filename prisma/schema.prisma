@@ -152,22 +152,28 @@ model SearchPreference {
 }
 
 model Resume {
-  id               String   @id @default(cuid())
-  userId           String
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name             String
-  type             String   @default("original")
-  originalFileName String?
-  fileData         String?
-  fileType         String?
-  parsedContent    String?
-  structuredData   String?
-  tailoredContent  String?
-  changeLog        String?
-  applicationId    String?
+  id                    String   @id @default(cuid())
+  userId                String
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                  String
+  type                  String   @default("original")
+  originalFileName      String?
+  fileData              String?
+  fileType              String?
+  convertedDocxData     String?
+  conversionConfidence  String?
+  conversionIssues      String?
+  version               Int      @default(1)
+  isCurrent             Boolean  @default(true)
+  replacedById          String?
+  parsedContent         String?
+  structuredData        String?
+  tailoredContent       String?
+  changeLog             String?
+  applicationId         String?
 
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }
 
 model JobListing {

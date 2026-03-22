@@ -7,6 +7,9 @@ import { callClaudeJSON } from "@/lib/ai/client";
 import { RESUME_PARSER_SYSTEM, buildResumeParserMessage } from "@/lib/ai/prompts/resume-parser";
 import { ParsedResumeSchema, type ParsedResume } from "@/lib/ai/schemas/parsed-resume";
 import { calculateProfileStrength } from "@/types";
+import { convertPdfToDocx } from "@/lib/resume/pdf-to-docx";
+
+const MAX_VERSIONS = 3;
 
 export async function POST(request: Request) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -25,8 +28,40 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "File too large. Maximum size is 10MB." }, { status: 400 });
     }
 
+    // Validate file type
+    const ext = file.name.toLowerCase().split(".").pop() || "";
+    if (ext !== "pdf" && ext !== "docx" && ext !== "doc") {
+      return NextResponse.json(
+        { error: "Invalid file type. Please upload a .docx or .pdf file." },
+        { status: 400 }
+      );
+    }
+
+    const fileType = ext === "pdf" ? "pdf" : "docx";
+
     // Extract text from file
     const buffer = Buffer.from(await file.arrayBuffer());
+
+    // Basic corruption check
+    if (fileType === "pdf") {
+      const header = buffer.subarray(0, 5).toString("ascii");
+      if (!header.startsWith("%PDF")) {
+        return NextResponse.json(
+          { error: "This file appears to be corrupted. It does not have a valid PDF header." },
+          { status: 400 }
+        );
+      }
+    } else {
+      // DOCX files start with PK (ZIP format)
+      const header = buffer.subarray(0, 2).toString("ascii");
+      if (header !== "PK") {
+        return NextResponse.json(
+          { error: "This file appears to be corrupted. It does not have a valid DOCX header." },
+          { status: 400 }
+        );
+      }
+    }
+
     const rawText = await extractTextFromFile(buffer, file.name);
 
     // Parse with AI
@@ -38,23 +73,87 @@ export async function POST(request: Request) {
     // Validate with Zod
     const validated = ParsedResumeSchema.parse(parsed);
 
-    // Determine file type
-    const ext = file.name.toLowerCase().split(".").pop() || "";
-    const fileType = ext === "pdf" ? "pdf" : "docx";
+    // Handle PDF-to-DOCX conversion
+    let convertedDocxData: string | null = null;
+    let conversionConfidence: string | null = null;
+    let conversionIssues: string | null = null;
 
-    // Save resume record with original file bytes for format-preserving editing
+    if (fileType === "pdf") {
+      const conversionResult = await convertPdfToDocx(rawText, {
+        name: validated.name,
+        headline: validated.headline,
+        summary: validated.summary,
+        currentLocation: validated.currentLocation,
+        email: validated.email,
+        phone: validated.phone,
+        skills: validated.skills,
+        workHistory: validated.workHistory,
+        education: validated.education,
+        certifications: validated.certifications,
+      });
+
+      convertedDocxData = conversionResult.docxBuffer.toString("base64");
+      conversionConfidence = conversionResult.confidence;
+      conversionIssues = conversionResult.issues.length > 0
+        ? JSON.stringify(conversionResult.issues)
+        : null;
+    }
+
+    // Determine the next version number
+    const existingResumes = await prisma.resume.findMany({
+      where: { userId: session.user.id, type: "original" },
+      orderBy: { version: "desc" },
+      select: { id: true, version: true, isCurrent: true },
+    });
+
+    const nextVersion = existingResumes.length > 0
+      ? existingResumes[0].version + 1
+      : 1;
+
+    // Mark all existing originals as not current
+    if (existingResumes.length > 0) {
+      await prisma.resume.updateMany({
+        where: { userId: session.user.id, type: "original", isCurrent: true },
+        data: { isCurrent: false },
+      });
+    }
+
+    // Save new resume record
     const resume = await prisma.resume.create({
       data: {
         userId: session.user.id,
-        name: "Original Resume",
+        name: `Resume v${nextVersion}`,
         type: "original",
         originalFileName: file.name,
         fileData: buffer.toString("base64"),
         fileType,
+        convertedDocxData,
+        conversionConfidence,
+        conversionIssues,
+        version: nextVersion,
+        isCurrent: true,
         parsedContent: rawText,
         structuredData: JSON.stringify(validated),
       },
     });
+
+    // Enforce version limit: keep only MAX_VERSIONS previous versions
+    const oldVersions = await prisma.resume.findMany({
+      where: {
+        userId: session.user.id,
+        type: "original",
+        isCurrent: false,
+      },
+      orderBy: { version: "desc" },
+      select: { id: true, version: true },
+    });
+
+    if (oldVersions.length > MAX_VERSIONS) {
+      const toDelete = oldVersions.slice(MAX_VERSIONS);
+      await prisma.resume.deleteMany({
+        where: { id: { in: toDelete.map((v) => v.id) } },
+      });
+    }
 
     // Upsert profile with parsed data
     const profile = await prisma.profile.upsert({
@@ -95,17 +194,18 @@ export async function POST(request: Request) {
           const start = new Date(w.startDate);
           const end = w.endDate ? new Date(w.endDate) : null;
           return {
-          profileId: profile.id,
-          company: w.company,
-          title: w.title,
-          location: w.location,
-          startDate: isNaN(start.getTime()) ? new Date() : start,
-          endDate: end && !isNaN(end.getTime()) ? end : null,
-          isCurrent: w.isCurrent,
-          description: w.description,
-          bullets: JSON.stringify(w.bullets),
-          industry: w.industry,
-        };}),
+            profileId: profile.id,
+            company: w.company,
+            title: w.title,
+            location: w.location,
+            startDate: isNaN(start.getTime()) ? new Date() : start,
+            endDate: end && !isNaN(end.getTime()) ? end : null,
+            isCurrent: w.isCurrent,
+            description: w.description,
+            bullets: JSON.stringify(w.bullets),
+            industry: w.industry,
+          };
+        }),
       });
     }
 
@@ -152,10 +252,29 @@ export async function POST(request: Request) {
       });
     }
 
+    // Count preserved tailored versions
+    const tailoredCount = await prisma.resume.count({
+      where: { userId: session.user.id, type: "tailored" },
+    });
+
     return NextResponse.json({
-      resume,
+      resume: {
+        id: resume.id,
+        name: resume.name,
+        version: resume.version,
+        fileType: resume.fileType,
+        originalFileName: resume.originalFileName,
+        conversionConfidence: resume.conversionConfidence,
+        conversionIssues: resume.conversionIssues
+          ? JSON.parse(resume.conversionIssues)
+          : [],
+      },
       parsed: validated,
-      message: "Resume parsed successfully",
+      previousVersions: oldVersions.length,
+      tailoredVersionsPreserved: tailoredCount,
+      message: existingResumes.length > 0
+        ? `Resume replaced successfully (v${nextVersion}). ${tailoredCount} tailored version(s) preserved.`
+        : "Resume parsed successfully",
     });
   } catch (error) {
     console.error("Resume upload error:", error);
